@@ -110,8 +110,7 @@ class waybackm(BHunters):
                     try:
                         # self.log.info(i)
                         if ".js" in i:
-                            response = requests.get(i)
-                            if response.status_code == 200 and 'javascript' in response.headers.get('content-type', '').lower():
+                            if self.checkjs(i):
                                 collection2 = db["js"]
                                 existing_document = collection2.find_one({"url": i})
                                 if existing_document is None:
