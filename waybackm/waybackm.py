@@ -8,6 +8,8 @@ from karton.core import Task
 import tempfile
 import requests
 import re
+from bson.objectid import ObjectId
+
 class waybackm(BHunters):
     """
     Paths wayback scanner developed by Bormaa
@@ -60,6 +62,8 @@ class waybackm(BHunters):
         subdomain = task.payload["subdomain"]
         subdomain = re.sub(r'^https?://', '', subdomain)
         subdomain = subdomain.rstrip('/')
+        self.scanid=task.payload_persistent["scan_id"]
+        report_id=task.payload_persistent["report_id"]
         if source == "producer":
             url = task.payload_persistent["domain"]
         else:
@@ -69,9 +73,11 @@ class waybackm(BHunters):
         url = re.sub(r'^https?://', '', url)
         url = url.rstrip('/')
         try:
-            db = self.db
+            
 
             result=self.scan(url)
+            self.waitformongo()
+            db = self.db
             resarr=[]
             for i in result:
                 if i != "":
@@ -83,7 +89,7 @@ class waybackm(BHunters):
                 resultdata = "\n".join(map(lambda x: str(x), resarr)).encode()
                 self.log.info("Uploading data of "+url)
                 # self.log.info(resultdata)
-                senddata=self.backend.upload_object("bhunters","wayback_"+self.encode_filename(url),resultdata)
+                senddata=self.backend.upload_object("bhunters","wayback_"+self.scanid+"_"+self.encode_filename(url),resultdata)
                 tag_task = Task(
                     {"type": "paths", "stage": "scan"},
                     payload={"data": url,
@@ -96,15 +102,17 @@ class waybackm(BHunters):
                 self.send_task(tag_task)
                 domain = re.sub(r'^https?://', '', url)
                 domain = domain.rstrip('/')
-                domains_collection = db["domains"]
-                domain_document = domains_collection.find_one({"Domain": domain})
-                existing_links = domain_document.get("Links", {}).get(self.identity, [])
-                new_links = [link for link in resarr if link not in existing_links]
-                if new_links:
-                    domains_collection.update_one({"Domain": domain}, {"$push": {f"Links.{self.identity}": {"$each": new_links}}})
-
+                domains_collection = db["links"]
+                existing_links=[]
+                domain_document = domains_collection.find_one({"report_id":ObjectId(report_id),"source":self.identity})
                 if domain_document:
-                    domain_id = domain_document["_id"]
+                    existing_links = domain_document.get("Links", [])
+                    new_links = [link for link in resarr if link not in existing_links]
+                else:
+                    new_links=resarr
+                if new_links:
+                    domains_collection.update_one({"report_id": ObjectId(report_id),"source":self.identity}, {"$push": {f"Links": {"$each": new_links}}}, upsert=True)
+
 
                 for i in resarr:
                     try:
@@ -112,12 +120,12 @@ class waybackm(BHunters):
                         if ".js" in i:
                             if self.checkjs(i):
                                 collection2 = db["js"]
-                                existing_document = collection2.find_one({"url": i})
+                                existing_document = collection2.find_one({"report_id":ObjectId(report_id),"url": i})
                                 if existing_document is None:
 
                                     tag_task = Task(
                         {"type": "js", "stage": "new"},
-                        payload={"domain_id": domain_id,
+                        payload={
                         "file": i,
                         "subdomain":subdomain,
                         "module":"wayback"
